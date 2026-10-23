@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Secret Agent Hacker Terminal & Mini-Game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html,body{margin:0;height:100%;font-family:'Consolas',monospace;overflow:hidden;background:#0d0d0d;color:#0f0;}
+#matrix{position:absolute;top:0;left:0;width:100%;height:100%;}
+header{position:fixed;top:0;left:0;width:100%;padding:10px 20px;box-sizing:border-box;background:rgba(0,0,0,.85);color:#0f0;font-size:1.2rem;text-shadow:0 0 8px #0f0;z-index:10;}
+#toolbar{position:fixed;top:60px;left:20px;right:20px;display:flex;gap:15px;justify-content:center;z-index:10;}
+.tool{display:flex;flex-direction:column;align-items:center;}
+.button{background:#111;border:2px solid #0f0;color:#0f0;padding:12px 24px;cursor:pointer;font-size:1rem;text-transform:uppercase;transition:all .2s;box-shadow:0 0 8px #0f0;user-select:none;}
+.button:hover{background:#0f0;color:#111;transform:scale(1.05);}
+.button:active{transform:scale(.95);}
+.progress{position:relative;width:200px;height:10px;background:#111;border:1px solid #0f0;margin-top:5px;}
+.bar{position:absolute;top:0;left:0;height:100%;width:0%;background:#0f0;}
+#log{position:fixed;bottom:15px;left:20px;right:20px;max-width:560px;max-height:30vh;overflow:auto;background:rgba(0,0,0,.85);border:1px solid #0f0;padding:10px;z-index:10;font-size:.9rem;}
+#log div{margin:2px 0;}
+#gameModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);color:#0f0;align-items:center;justify-content:center;flex-direction:column;font-size:1.2rem;text-align:center;z-index:20;}
+#gameModal.open{display:flex;}
+#gameModal input{background:#111;border:2px solid #0f0;color:#0f0;padding:8px;width:260px;margin-top:10px;}
+#gameModal button{margin-top:15px;background:#0f0;color:#111;border:none;padding:8px 16px;cursor:pointer;}
+#closeGame{position:absolute;top:20px;right:30px;cursor:pointer;font-size:2rem;}
+@keyframes flicker{0%{opacity:.4}50%{opacity:1}100%{opacity:.4}}
+.neon{animation:flicker 2s infinite;}
+@media (prefers-reduced-motion:reduce){.neon{animation:none;}}
+@media (max-width:600px){#toolbar{flex-direction:column;align-items:center;}}
+</style>
+</head>
+<body>
+
+<header>Created by Student #44</header>
+
+<div id="toolbar">
+  <div class="tool"><div class="button" data-action="scan">SCAN</div><div class="progress"><div class="bar" id="bar-scan"></div></div></div>
+  <div class="tool"><div class="button" data-action="decrypt">DECRYPT</div><div class="progress"><div class="bar" id="bar-decrypt"></div></div></div>
+  <div class="tool"><div class="button" data-action="upload">UPLOAD</div><div class="progress"><div class="bar" id="bar-upload"></div></div></div>
+</div>
+
+<canvas id="matrix"></canvas>
+<div id="log"><div>&gt; Terminal ready. Hint: the old arcade code unlocks something...</div></div>
+
+<div id="gameModal">
+  <div id="closeGame" title="Close">&#10006;</div>
+  <h2 class="neon">Cipher Mini-Game</h2>
+  <p>Find the secret shift (0-25) to decode the message:</p>
+  <p id="cipherText"></p>
+  <input type="number" id="shiftInput" min="0" max="25" placeholder="Shift (e.g., 3)">
+  <button id="decodeBtn">Decode</button>
+  <p id="result" style="margin-top:10px;"></p>
+</div>
+
+<script>
+/* ===== Pure logic (testable) ===== */
+// Shifts letters by n places. Works with negative shifts and ignores non-letters.
+function caesar(text, n) {
+  const shift = ((n % 26) + 26) % 26;
+  return String(text).replace(/[a-z]/gi, ch => {
+    const base = ch <= 'Z' ? 65 : 97;
+    return String.fromCharCode((ch.charCodeAt(0) - base + shift) % 26 + base);
+  });
+}
+
+/* ===== Matrix rain ===== */
+const canvas = document.getElementById('matrix');
+const ctx = canvas.getContext('2d');
+let w, h, cols, ypos;
+function setup() {
+  w = canvas.width = innerWidth;
+  h = canvas.height = innerHeight;
+  cols = Math.floor(w / 20) + 1;
+  ypos = Array.from({length: cols}, () => Math.random() * h);
+}
+setup();
+addEventListener('resize', setup);
+
+function matrix() {
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#0f0';
+  ctx.font = '18px monospace';
+  ypos.forEach((y, i) => {
+    ctx.fillText(String.fromCharCode(0x30A0 + Math.random() * 96), i * 20, y);
+    ypos[i] = (y > h && Math.random() > 0.975) ? 0 : y + 20;
+  });
+}
+setInterval(matrix, 50);
+
+/* ===== Sound (one shared AudioContext) ===== */
+let actx;
+function beep(freq = 440) {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = actx.createOscillator(), gain = actx.createGain();
+    osc.type = 'square'; osc.frequency.value = freq;
+    osc.connect(gain); gain.connect(actx.destination);
+    gain.gain.setValueAtTime(0.15, actx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.12);
+    osc.start(); osc.stop(actx.currentTime + 0.12);
+  } catch (e) { /* audio not available */ }
+}
+
+/* ===== Fake hack tools ===== */
+const actions = {
+  scan:    {duration: 2000, bar: '#bar-scan',    msg: ['Scanning ports...', 'Found 3 open ports. Target is wide open.']},
+  decrypt: {duration: 3000, bar: '#bar-decrypt', msg: ['Cracking encryption...', 'Key found: 0xDEADBEEF. Access granted.']},
+  upload:  {duration: 2500, bar: '#bar-upload',  msg: ['Uploading payload...', 'Upload complete. (Totally fake, relax.)']}
+};
+const running = {};
+const logEl = document.getElementById('log');
+function log(t) {
+  const d = document.createElement('div');
+  d.textContent = '> ' + t;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+document.querySelectorAll('.button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const act = btn.dataset.action;
+    if (running[act]) return;
+    running[act] = true;
+    const cfg = actions[act];
+    const bar = document.querySelector(cfg.bar);
+    bar.style.width = '0%';
+    beep(440);
+    log(cfg.msg[0]);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const pct = Math.min(100, ((Date.now() - start) / cfg.duration) * 100);
+      bar.style.width = pct + '%';
+      if (pct >= 100) {
+        clearInterval(timer);
+        running[act] = false;
+        beep(880);
+        log(cfg.msg[1]);
+      }
+    }, 50);
+  });
+});
+
+/* ===== Konami code unlocks the cipher game ===== */
+const konami = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+let kpos = 0;
+const SECRET_SHIFT = 3;
+const PLAIN = 'Hackers never sleep they just reboot';
+document.getElementById('cipherText').textContent = caesar(PLAIN, SECRET_SHIFT);
+
+const modal = document.getElementById('gameModal');
+addEventListener('keydown', e => {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  kpos = (key === konami[kpos]) ? kpos + 1 : (key === konami[0] ? 1 : 0);
+  if (kpos === konami.length) {
+    kpos = 0;
+    modal.classList.add('open');
+    beep(660);
+    log('Secret unlocked: cipher game!');
+  }
+});
+document.getElementById('closeGame').onclick = () => modal.classList.remove('open');
+
+document.getElementById('decodeBtn').onclick = () => {
+  const n = parseInt(document.getElementById('shiftInput').value, 10);
+  const res = document.getElementById('result');
+  if (Number.isNaN(n)) { res.textContent = 'Enter a number first.'; return; }
+  const out = caesar(document.getElementById('cipherText').textContent, -n);
+  if (n === SECRET_SHIFT) { res.textContent = 'Correct! "' + out + '"'; beep(990); }
+  else { res.textContent = 'Wrong shift. You got: "' + out + '"'; beep(150); }
+};
+
+/* ===== Task 4: unit tests ===== */
+console.assert(caesar('abc', 1) === 'bcd', 'normal shift failed');
+console.assert(caesar('', 5) === '', 'empty input failed');
+console.assert(caesar('bcd', -1) === 'abc', 'negative shift failed');
+</script>
+</body>
+</html>
